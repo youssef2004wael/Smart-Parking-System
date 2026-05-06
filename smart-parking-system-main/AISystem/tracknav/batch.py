@@ -1,7 +1,7 @@
 import threading
 from queue import Queue, Empty
 from ultralytics import YOLO
-
+import time
 class BatchDetectionEngine(threading.Thread):
     def __init__(self, model_path, batch_size=6, device="cuda"):
         super().__init__(daemon=True)
@@ -9,7 +9,7 @@ class BatchDetectionEngine(threading.Thread):
         self.device = device
         self.batch_size = batch_size
 
-        self.input_queue = Queue(maxsize=30)
+        self.input_queue = Queue(maxsize=10)
         self.results = {}
         self.lock = threading.Lock()
         self.running = True
@@ -58,6 +58,7 @@ class BatchDetectionEngine(threading.Thread):
                 verbose=False,
                 classes=[2, 3, 5, 7]
             )
+            time.sleep(0.005)
 
             with self.lock:
                 for cam_id, res, f in zip(cam_ids, results, frames):

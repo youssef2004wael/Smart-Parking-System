@@ -6,6 +6,8 @@ import os
 
 
 class CameraManager:
+    FRAME_WIDTH = 960
+    FRAME_HEIGHT = 540
     def __init__(self,json_path):
         # cam_id -> (frame, timestamp)
         self.json_path = json_path
@@ -13,6 +15,7 @@ class CameraManager:
         self.frames = {}
         self.locks = {cam_id: threading.Lock() for cam_id in self.camera_configs.keys()}
         self.running = True
+
 
     def _load_config(self):
         try:
@@ -52,33 +55,39 @@ class CameraManager:
             print(f"[ERROR] Cannot open camera {cam_id}")
 
         frame_counter = 0
-        while self.running:
-            grabbed = cap.grab()
-            frame_counter += 1
-            if frame_counter % 2 != 0:
-                continue
+        try:
+            while self.running:
+                grabbed = cap.grab()
+                frame_counter += 1
+                time.sleep(0.01)
 
-            if not grabbed:
-                print(f"[RECONNECT] Cam {cam_id} lost... reconnecting")
-                cap.release()
-                time.sleep(1)
-                cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
-                continue
-            ret, frame = cap.retrieve()
+                if frame_counter % 2 != 0:
+                    continue
 
-            if not ret or frame is None:
-                continue
+                if not grabbed:
+                    print(f"[RECONNECT] Cam {cam_id} lost... reconnecting")
+                    cap.release()
+                    time.sleep(1)
+                    cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+                    continue
+                ret, frame = cap.retrieve()
 
-            # frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+                if not ret or frame is None:
+                    continue
 
-            # ❗ Filter gray / corrupted frames
-            if frame.mean() < 20:
-                print(f"[WARNING] Cam {cam_id} gray frame skipped")
-                continue
+                frame = cv2.resize(frame, (self.FRAME_WIDTH, self.FRAME_HEIGHT))
 
-            # Save latest frame with timestamp
-            with self.locks[cam_id]:
-                self.frames[cam_id] = (frame, time.time())
+                # ❗ Filter gray / corrupted frames
+                if frame.mean() < 20:
+                    print(f"[WARNING] Cam {cam_id} gray frame skipped")
+                    continue
+
+                # Save latest frame with timestamp
+                with self.locks[cam_id]:
+                    self.frames[cam_id] = (frame, time.time())
+        except Exception as e:
+            print(f"[CRASH] Camera {cam_id}: {e}")
+
 
 
     def get_frame(self, cam_id):
