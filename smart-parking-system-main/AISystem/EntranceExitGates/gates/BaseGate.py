@@ -225,7 +225,7 @@ class BaseGate:
                                 plate = 'None'
                             # embedding = self.get_embedding(best_frame)
                             # print("Embedding:", embedding)
-                            self.api.send_to_backend(best_frame, plate)
+                            self.api.send_async(self.api.send_to_backend,best_frame, plate)
 
 
                         self.processed_ids.add(track_id)

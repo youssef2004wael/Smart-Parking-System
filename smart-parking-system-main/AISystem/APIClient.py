@@ -1,3 +1,5 @@
+import threading
+
 import cv2
 import numpy as np
 import requests
@@ -5,7 +7,7 @@ from sympy.codegen.ast import continue_
 
 from AISystem.EntranceExitGates.CarDetails import CarDetails
 
-
+import threading
 class APIClient:
 
     def __init__(self, base_url):
@@ -92,7 +94,6 @@ class APIClient:
 
     def send_embeddings(self,embedding):
         base_url = "http://127.0.0.1:8000/api/update-perspective/"
-        print(embedding)
         if embedding is None or len(embedding) == 0 :
             print("NO embeddings in send_embeddings method")
             return
@@ -107,18 +108,16 @@ class APIClient:
                 headers=self.HEADERS
             )
             if response.status_code in (200, 201):
-                print("✅ Sent to backend successfully")
+                print("✅ Embeddings Send"+response.text)
             else:
                 print("❌ Backend error:", response.text)
         except requests.exceptions.RequestException as e:
             print("❌ Request failed:", str(e))
     def send_tracking_embeddings(self,color,embedding,camera_id):
-        print(camera_id)
         if embedding is None or len(embedding) == 0:
-            print("NO embeddings in send_embeddings method")
             return
         if int(camera_id) ==2:
-            self.send_embeddings(embedding)
+            self.send_async(self.send_embeddings,embedding)
             return
         payload = {
             "car_embedding": embedding,
@@ -132,11 +131,21 @@ class APIClient:
                 headers=self.HEADERS
             )
             if response.status_code in (200, 201):
-                print("✅ Sent to backend successfully")
+                print("✅ Matched"+response.text)
             else:
-                print("❌ Backend error:", response.text)
+                print("❌ NO Matching Embeddings:", response.text)
         except requests.exceptions.RequestException as e:
             print("❌ Request failed:", str(e))
+
+
+
+    def send_async(self, func, *args):
+        """Helper to run any API method in the background."""
+        thread = threading.Thread(target=func, args=args, daemon=True)
+        thread.start()
+
+    # Example usage in VehicleTracker or main:
+    # self.api.send_async(self.api.send_tracking_embeddings, color, emb, cam_id)
 
 
 

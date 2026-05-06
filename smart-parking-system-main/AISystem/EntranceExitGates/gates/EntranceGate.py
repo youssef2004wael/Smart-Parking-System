@@ -1,3 +1,4 @@
+import queue
 
 import cv2
 
@@ -16,24 +17,30 @@ class EntranceGate(BaseGate):
 
         super().__init__(source, car_model_path,plate_model_path,plate_recognition_path, backend_url)
 
+        self.frame_queue = queue.Queue(maxsize=1)
+        self.result_queue = queue.Queue(maxsize=1)
+        self.cam_id = 1
 
-        # self.start_left = (8, 158)
-        # self.end_left = (541, 57)
+
+        self.start_left = (4, 259)
+        self.end_left = (595, 215)
+
+        self.start_right =  (762, 533)
+        self.end_right = (851, 273)
+
+        self.start_trigger =(104, 253)
+        self.end_trigger = (773, 496)
+
+
+        # self.start_left = (5, 361)
+        # self.end_left = (600, 140)
         #
-        # self.start_right = (814, 530)
-        # self.end_right = (908, 145)
+        # self.start_right = (848, 531)
+        # self.end_right = (871, 131)
         #
-        # self.start_trigger = (215, 123)
-        # self.end_trigger = (858, 345)
-        self.start_left = (5, 361)
-        self.end_left = (600, 140)
-
-        self.start_right = (848, 531)
-        self.end_right = (871, 131)
-
-        self.start_trigger = (227, 282)
-        self.end_trigger = (862, 392)
-        ModelRegistry.initialize()
+        # self.start_trigger = (227, 282)
+        # self.end_trigger = (862, 392)
+        # ModelRegistry.initialize()
 
 
     def get_roi_polygon(self):
