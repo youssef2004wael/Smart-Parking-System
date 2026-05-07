@@ -9,11 +9,15 @@ from PIL import Image
 from torchvision import transforms
 from collections import defaultdict
 import threading
+import gc
+from collections import Counter
+
 
 from AISystem.APIClient import APIClient
 from AISystem.model_registry import ModelRegistry
 from AISystem.tracknav.camera_manager import get_shared_frame
 from AISystem.tracknav.trackpercamera import PerCameraTracker
+from AISystem.tracknav.debug_logger import log_debug
 
 
 class VehicleTracker:
@@ -37,11 +41,12 @@ class VehicleTracker:
         self.disappeared_count = defaultdict(int)
         self.engine = engine
         self.MAX_STATIONARY_FRAMES = 60
-        self.max_embeddings_per_track = 5
+        self.max_embeddings_per_track = 7
         if int(self.camera_id) == 2:
-            self.max_embeddings_per_track = 2
+            self.max_embeddings_per_track = 3
+
         self.window_name = f"Tracking - {self.camera_id}"
-        ModelRegistry.initialize()
+
         self.device = ModelRegistry.device
         self.reid_model = ModelRegistry.reid_model
         self.clip_model = ModelRegistry.clip_model
@@ -81,11 +86,11 @@ class VehicleTracker:
         self.track_history = defaultdict(list)
         self.track_embeddings = defaultdict(list)
         self.track_colors = {}
-        self.stationary_counter = defaultdict(int)
+        self.stationary_count = {}
         self.finalized_ids = set()
         self.prev_active_ids = set()
         self.frame_count = 0
-        self.api = APIClient("https://solven.aelanji.cloud/api/tracking/")
+        self.api = APIClient("http://127.0.0.1:8000/api/tracking/")
         self._selected_point = None
 
 
@@ -164,19 +169,33 @@ class VehicleTracker:
         return emb / (np.linalg.norm(emb) + 1e-6)
 
     def _finalize_track(self, track_id: int):
+
         if track_id in self.finalized_ids:
             return
         embs = self.track_embeddings.get(track_id)
         if not embs:
             return
+        if len(self.finalized_ids) > 500:
+            self.finalized_ids = set(list(self.finalized_ids)[-300:])
+        if len(self.track_colors[track_id]) > 20:
+            self.track_colors[track_id].pop(0)
 
         self.finalized_ids.add(track_id)
+
         avg_emb = np.array(embs).mean(axis=0)
         avg_emb /= (np.linalg.norm(avg_emb) + 1e-6)
-        color = self.track_colors.get(track_id, "unknown")
+        colors = self.track_colors.get(track_id, [])
+        if colors:
+            final_color = Counter(colors).most_common(1)[0][0]
+        else:
+            final_color = "unknown"
+        print(f"[Tracker {self.camera_id}] Finalized ID {track_id} | Color: {final_color} | Embeddings: {len(embs)}")
+        self.api.send_async(self.api.send_tracking_embeddings,final_color, avg_emb.tolist(), self.camera_id)
+        self._cleanup_track_data(track_id)
 
-        print(f"[Tracker {self.camera_id}] Finalized ID {track_id} | Color: {color} | Embeddings: {len(embs)}")
-        self.api.send_tracking_embeddings(color, avg_emb.tolist(), self.camera_id)
+        if track_id % 10 == 0:
+            gc.collect()
+
     def _inside_roi_for_embeddings(self, x1, y1, x2, y2):
         center_x = (x1 + x2) // 2
         center_y = (y1 + y2) // 2
@@ -212,76 +231,17 @@ class VehicleTracker:
 
         return np.concatenate([xyxy, conf[:, None], cls[:, None]], axis=1)  # (N, 6)
 
-    # def process_frame(self, frame):
-    #     if frame is None:
-    #         return None
-    #
-    #     self.frame_count += 1
-    #     self.engine.submit_frame(self.camera_id, frame.copy())
-    #
-    #     res_data = self.engine.get_result(self.camera_id)
-    #
-    #     if res_data is None:
-    #         temp_view = frame.copy()
-    #         self.draw_roi_on_frame(temp_view)
-    #         return temp_view
-    #
-    #     inference_frame, results = res_data
-    #     display_frame = inference_frame.copy()
-    #
-    #     current_active_ids = set()
-    #     detections = self.extract_detections(results)
-    #     tracks = self.tracker.update(detections, inference_frame)
-    #
-    #
-    #     if tracks is not None and len(tracks) > 0:
-    #         for track in tracks:
-    #             if not track.is_activated: continue
-    #
-    #             track_id = track.track_id
-    #             x1, y1, x2, y2 = map(int, track.tlbr)
-    #             if track_id in self.finalized_ids: continue
-    #
-    #             if self.is_inside_roi(x1, y1, x2, y2):
-    #                 current_active_ids.add(track_id)
-    #                 self.disappeared_count[track_id] = 0
-    #
-    #                 under_cap = len(self.track_embeddings[track_id]) < self.max_embeddings_per_track
-    #                 if under_cap and (len(self.track_embeddings[track_id]) == 0 or self.frame_count % 1 == 0):
-    #                     h, w = inference_frame.shape[:2]
-    #                     x1p, y1p, x2p, y2p = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
-    #
-    #                     crop = inference_frame[y1p:y2p, x1p:x2p].copy()
-    #
-    #
-    #                     if crop is not None and crop.size > 0:
-    #                         crop_h, crop_w = crop.shape[:2]
-    #                         min_h_size = 80
-    #                         min_w_size = 150
-    #                         if crop_w >= min_w_size and crop_h >= min_h_size:
-    #                             # self.save_crop_for_debug(crop)
-    #                             emb = self.get_embedding(crop)
-    #                             if emb is not None:
-    #                                self.track_embeddings[track_id].append(emb)
-    #                             if track_id not in self.track_colors:
-    #                                self.track_colors[track_id] = self.getColor(crop)
-    #
-    #                 cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    #                 cv2.putText(display_frame, f"ID:{track_id}", (x1, y1 - 10),
-    #                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    #             else:
-    #                 if track_id not in current_active_ids:
-    #                     self._finalize_track(track_id)
-    #
-    #         lost_ids = self.prev_active_ids - current_active_ids
-    #         for tid in lost_ids:
-    #             if tid not in self.finalized_ids:
-    #                 self._finalize_track(tid)
-    #         self.prev_active_ids = current_active_ids
-    #
-    #     self.draw_roi_on_frame(display_frame)
-    #
-    #     return display_frame
+    def _cleanup_track_data(self, track_id):
+        self.track_history.pop(track_id, None)
+        self.track_embeddings.pop(track_id, None)
+        self.stationary_count.pop(track_id, None)
+        self.disappeared_count.pop(track_id, None)
+
+        if track_id in self.track_colors:
+            del self.track_colors[track_id]
+
+        self.prev_active_ids.discard(track_id)
+
     def process_frame(self, frame):
         if frame is None:
             return None
@@ -307,75 +267,107 @@ class VehicleTracker:
                 if not track.is_activated: continue
 
                 track_id = track.track_id
-                x1, y1, x2, y2 = map(int, track.tlbr)
                 if track_id in self.finalized_ids: continue
 
-                # --- MOTION CHECK LOGIC ---
-                # Calculate current centroid
-                centroid = (int((x1 + x2) / 2), int((y1 + y2) / 2))
+                x1, y1, x2, y2 = map(int, track.tlbr)
 
-                # Initialize history if new track
+                # --- MOTION CHECK LOGIC (OPTIMIZED) ---
+                centroid = (int((x1 + x2) / 2), int((y1 + y2) / 2))
                 if track_id not in self.track_history:
                     self.track_history[track_id] = []
-
                 self.track_history[track_id].append(centroid)
 
-                # Keep only the last 10 frames of movement history
-                if len(self.track_history[track_id]) > 10:
+                # احتفظ بـ 30 نقطة (ثانية واحدة تقريباً)
+                if len(self.track_history[track_id]) > 30:
                     self.track_history[track_id].pop(0)
 
-                # Calculate displacement (current vs oldest in window)
-                is_moving = False
-                if len(self.track_history[track_id]) > 5:
-                    first_pos = self.track_history[track_id][0]
-                    # Euclidean distance: sqrt((x2-x1)^2 + (y2-y1)^2)
-                    dist = ((centroid[0] - first_pos[0]) ** 2 + (centroid[1] - first_pos[1]) ** 2) ** 0.5
+                # المنطق هنا: العربية "تعتبر" بتتحرك لحد ما يثبت العكس
+                is_moving = True
+                current_dist = 0
 
-                    # Threshold: 5-10 pixels is usually enough to filter camera jitter/parked cars
-                    if dist > 7:
+                if len(self.track_history[track_id]) >= 25:  # لما نجمع داتا كافية نبدأ نحكم
+                    first_pos = self.track_history[track_id][0]
+                    current_dist = ((centroid[0] - first_pos[0]) ** 2 + (centroid[1] - first_pos[1]) ** 2) ** 0.5
+
+                    # لو المسافة المقطوعة في ثانية أقل من 5 بيكسل، يبقى فعلاً واقفة
+                    if current_dist < 5:
+                        is_moving = False
+                    else:
                         is_moving = True
                 # ---------------------------
 
-                if self.is_inside_roi(x1, y1, x2, y2):
+
+                if self._inside_roi_for_embeddings(x1, y1, x2, y2):
                     current_active_ids.add(track_id)
                     self.disappeared_count[track_id] = 0
 
-                    # Only take embeddings if the car is actually moving
+                    # --- STATIONARY LOGIC ---
+                    if is_moving:
+                        self.stationary_count[track_id] = 0
+                    else:
+                        self.stationary_count[track_id] = self.stationary_count.get(track_id, 0) + 1
+
+                    # لو وقفت 5 ثواني (150 فريم) نبعت الداتا
+                    if self.stationary_count.get(track_id, 0) > 150:
+                        if len(self.track_embeddings[track_id]) > 0:
+                            self._finalize_track(track_id)
+                            continue
+
+
                     under_cap = len(self.track_embeddings[track_id]) < self.max_embeddings_per_track
-                    if is_moving and under_cap and (
-                            len(self.track_embeddings[track_id]) == 0 or self.frame_count % 1 == 0):
+                    if is_moving and under_cap and self.frame_count % 2 == 0:
                         h, w = inference_frame.shape[:2]
-                        x1p, y1p, x2p, y2p = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
+                        if int(self.camera_id) != 2:
+                            padding_ratio = 0.2
+                            box_w = x2 - x1
+                            pad_w = int(box_w * padding_ratio)
+                            x1p = max(0, x1 - pad_w)
+                            y1p = max(0, y1)
+                            x2p = min(w, x2 + pad_w)
+                            y2p = min(h, y2)
+                        else:
+                           x1p, y1p, x2p, y2p = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
+
                         crop = inference_frame[y1p:y2p, x1p:x2p].copy()
 
                         if crop is not None and crop.size > 0:
-                            crop_h, crop_w = crop.shape[:2]
-                            min_h_size, min_w_size = 80, 150
-                            if crop_w >= min_w_size and crop_h >= min_h_size:
+                            w = 200
+                            if int(self.camera_id) == 2:
+                                w = 150
+                            if crop.shape[1] >= w and crop.shape[0] >= 80:
+                                self.save_crop_for_debug(crop)
                                 emb = self.get_embedding(crop)
                                 if emb is not None:
                                     self.track_embeddings[track_id].append(emb)
                                 if track_id not in self.track_colors:
-                                    self.track_colors[track_id] = self.getColor(crop)
+                                    self.track_colors[track_id] = []
+                                color = self.getColor(crop)
+                                self.track_colors[track_id].append(color)
 
-                    # Visualization: Color code or label moving vs static
-                    color = (0, 255, 0) if is_moving else (0, 0, 255)  # Green moving, Red static
+                    # رسم البيانات للتصحيح (Debug)
+                    color = (0, 255, 0) if is_moving else (0, 0, 255)
                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(display_frame, f"ID:{track_id} {'MOVING' if is_moving else 'STATIC'}",
-                                (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    # ضفت لك الـ dist والـ count عشان تشوفهم بعينك وتعرف ليه بيقلب static
+                    status_text = f"ID:{track_id} {'MOV' if is_moving else 'STA'} D:{int(current_dist)} S:{self.stationary_count.get(track_id, 0)}"
+                    cv2.putText(display_frame, status_text, (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
                 else:
-                    if track_id not in current_active_ids:
+                    if track_id in self.prev_active_ids:
                         self._finalize_track(track_id)
 
             lost_ids = self.prev_active_ids - current_active_ids
             for tid in lost_ids:
                 if tid not in self.finalized_ids:
                     self._finalize_track(tid)
+
             self.prev_active_ids = current_active_ids
+            if len(self.track_history) > 100:
+                print(f"[WARNING] Too many tracks: {len(self.track_history)} → cleaning...")
+                for tid in list(self.track_history.keys())[:50]:
+                    self._cleanup_track_data(tid)
 
         self.draw_roi_on_frame(display_frame)
         return display_frame
-
     def mouse_callback(self, event, x, y, flags, param):
         self._mouse_callback(event, x, y, flags, param)
 
