@@ -37,6 +37,7 @@ class ParkingRepository {
         final list = response.data as List<dynamic>;
         return list
             .whereType<Map<String, dynamic>>()
+            .where((json) => json['slot_type'] != 'entry' && json['slot_type'] != 'exit')
             .map(ParkingSlot.fromJson)
             .toList();
       }
@@ -81,6 +82,7 @@ class ParkingRepository {
         final list = response.data as List<dynamic>;
         return list
             .whereType<Map<String, dynamic>>()
+            .where((json) => json['slot_type'] != 'entry' && json['slot_type'] != 'exit')
             .map(Reservation.fromJson)
             .toList();
       }

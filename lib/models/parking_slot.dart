@@ -21,7 +21,7 @@ class ParkingSlot {
       slotNumber: json['slot_number']?.toString() ?? '',
       status: json['status']?.toString() ?? '',
       slotType: json['slot_type']?.toString() ?? '',
-      floor: (json['floor'] as num?)?.toInt() ?? 0,
+      floor: (json['floor'] as num?)?.toInt() ?? 1, // Default 1 because server removed it
       isAvailableForBooking: json['is_available_for_booking'] ?? true,
     );
   }

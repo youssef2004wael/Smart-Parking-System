@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 import '../services/secure_storage_service.dart';
 import '../parking_page.dart';
 import 'login_page.dart';
@@ -47,10 +49,36 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     if (!mounted) return;
 
     if (token != null && token.isNotEmpty) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const ParkingPage()),
-      );
+      try {
+        // Validate token with server instead of blindly trusting it
+        final authProvider = context.read<AuthProvider>();
+        await authProvider.fetchProfile();
+        
+        if (authProvider.isLoggedIn && mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const ParkingPage()),
+          );
+        } else {
+          // Token is invalid/expired, clear and go to login
+          await authProvider.logout();
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => const LoginPage()),
+            );
+          }
+        }
+      } catch (e) {
+        // Server error or invalid token, clear storage and go to login
+        await _storage.clearTokens();
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const LoginPage()),
+          );
+        }
+      }
     } else {
       Navigator.pushReplacement(
         context,

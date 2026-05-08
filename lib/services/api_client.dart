@@ -108,6 +108,7 @@ class ApiClient {
       }
     } catch (e) {
       print('Refresh API Error: $e');
+      await _storage.clearTokens();
     }
     return null;
   }
