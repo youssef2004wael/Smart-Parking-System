@@ -1,4 +1,5 @@
 import threading
+from AISystem.tracknav.debug_logger import log_debug
 
 import cv2
 import numpy as np
@@ -13,20 +14,18 @@ class APIClient:
     def __init__(self, base_url):
         self.base_url = base_url
         self.HEADERS = {'X-Camera-Key': 'my_ultra_secure_camera_token_2026'}
-    def send_to_entrance(self,image, plate_text):
+    def send_to_entrance(self,image, plate_text,color):
         success, img_encoded = cv2.imencode(".jpg", image)
         if not success:
             print("❌ Failed to encode image")
             return
-        car_details = CarDetails(image)
-        color= car_details.get_car_details()
 
         files = {}
 
         data = {
             "license_plate": plate_text,
             "car_color": color,
-            "camera_id": 1
+            "camera_id": "CAM-01"
         }
         files["entry_image"] = (
             "image.jpg",
@@ -56,7 +55,7 @@ class APIClient:
             return
         data = {
             "license_plate": plate_text,
-            "camera_id": 8
+            "camera_id": "CAM-08"
         }
         files = {"exit_image": (
             "image.jpg",
@@ -81,13 +80,13 @@ class APIClient:
         except requests.exceptions.RequestException as e:
             print("❌ Request failed:", str(e))
 
-    def send_to_backend(self, image, plate_text):
+    def send_to_backend(self, image, plate_text,color):
         if image is None:
             print("No image to send")
             return
 
         if self.base_url.endswith("/entry/"):
-            self.send_to_entrance(image,plate_text)
+            self.send_to_entrance(image,plate_text,color)
 
         elif self.base_url.endswith("/exit/"):
             self.end_to_exit(image,plate_text)
@@ -99,7 +98,7 @@ class APIClient:
             return
         data = {
             "car_embedding": embedding,
-            "camera_id": 2
+            "camera_id": "CAM-02"
         }
         try:
             response = requests.post(
@@ -116,9 +115,9 @@ class APIClient:
     def send_tracking_embeddings(self,color,embedding,camera_id):
         if embedding is None or len(embedding) == 0:
             return
-        if int(camera_id) ==2:
-            self.send_async(self.send_embeddings,embedding)
-            return
+        # if int(camera_id) ==2:
+        #     self.send_async(self.send_embeddings,embedding)
+        #     return
         payload = {
             "car_embedding": embedding,
             "camera_id": camera_id,
@@ -141,6 +140,17 @@ class APIClient:
 
     def send_async(self, func, *args):
         """Helper to run any API method in the background."""
+        # #region agent log
+        log_debug(
+            hypothesis_id="H3_THREAD_EXPLOSION",
+            location="APIClient.py:send_async",
+            message="Spawning async API thread",
+            data={
+                "target_func": getattr(func, "__name__", "unknown"),
+                "active_threads_before": threading.active_count(),
+            },
+        )
+        # #endregion
         thread = threading.Thread(target=func, args=args, daemon=True)
         thread.start()
 

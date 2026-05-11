@@ -14,8 +14,10 @@ from collections import Counter
 
 
 from AISystem.APIClient import APIClient
+from AISystem.EntranceExitGates.CarDetails import CarDetails
 from AISystem.model_registry import ModelRegistry
 from AISystem.tracknav.camera_manager import get_shared_frame
+from AISystem.tracknav.color import CarColorRecognizer
 from AISystem.tracknav.trackpercamera import PerCameraTracker
 from AISystem.tracknav.debug_logger import log_debug
 
@@ -32,9 +34,9 @@ class VehicleTracker:
         self.camera_id = str(camera_id)
         with open(config_path, 'r') as f:
             full_config = json.load(f)
-        config = full_config[self.camera_id]
+        self.config = full_config[self.camera_id]
         # self.camera_id = int(camera_id)
-        self.roi_points = np.array(config['roi'], dtype=np.int32)
+        self.roi_points = np.array(self.config['roi'], dtype=np.int32)
         self.original_height = 0
         self.original_width =0
         self.MAX_DISAPPEARED = 10
@@ -57,9 +59,9 @@ class VehicleTracker:
         self.car_colors = [
             "a black car", "a white car", "a silver car", "a gray car",
             "a red car", "a blue car", "a green car", "a beige car",
-            "a gold car", "a bronze car", "a brown car", "a sand colored car",
-            "a cream colored car", "an orange car", "a yellow car",
-            "a purple car", "a pink car", "a turquoise car"
+             "a brown car"
+            , "an orange car", "a yellow car",
+            "a purple car", "a pink car"
         ]
 
         self.color_names = [c.replace("a ", "").replace("an ", "").replace(" car", "").title()
@@ -144,17 +146,21 @@ class VehicleTracker:
 
 
     def getColor(self, car_crop) -> str:
-        img_rgb = cv2.cvtColor(car_crop, cv2.COLOR_BGR2RGB)
-        inputs = self.clip_processor(
-            text=self.car_colors,
-            images=Image.fromarray(img_rgb),
-            return_tensors="pt",
-            padding=True,
-        ).to(self.device)
-        with torch.no_grad():
-            outputs = self.clip_model(**inputs)
-        probs = outputs.logits_per_image.softmax(dim=1)[0]
-        return self.color_names[probs.argmax().item()]
+        cardetails = CarDetails()
+        color = cardetails.get_car_details(car_crop)
+        return color
+        # img_rgb = cv2.cvtColor(car_crop, cv2.COLOR_BGR2RGB)
+        # inputs = self.clip_processor(
+        #     text=self.car_colors,
+        #     images=Image.fromarray(img_rgb),
+        #     return_tensors="pt",
+        #     padding=True,
+        # ).to(self.device)
+        # with torch.no_grad():
+        #     outputs = self.clip_model(**inputs)
+        # probs = outputs.logits_per_image.softmax(dim=1)[0]
+        # return self.color_names[probs.argmax().item()]
+
 
     def get_embedding(self, img) -> np.ndarray:
 
@@ -181,16 +187,24 @@ class VehicleTracker:
             self.track_colors[track_id].pop(0)
 
         self.finalized_ids.add(track_id)
+        camera_id = self.config['camera_id']
 
         avg_emb = np.array(embs).mean(axis=0)
         avg_emb /= (np.linalg.norm(avg_emb) + 1e-6)
-        colors = self.track_colors.get(track_id, [])
-        if colors:
-            final_color = Counter(colors).most_common(1)[0][0]
+        if int(self.camera_id) != 2:
+            self.api.send_async(self.api.send_tracking_embeddings, avg_emb.tolist())
+            colors = self.track_colors.get(track_id, [])
+            if colors:
+                print(colors)
+                final_color = Counter(colors).most_common(1)[0][0]
+                self.api.send_async(self.api.send_tracking_embeddings, final_color, avg_emb.tolist(), camera_id)
+            else:
+                final_color = "Unkown"
         else:
-            final_color = "unknown"
-        print(f"[Tracker {self.camera_id}] Finalized ID {track_id} | Color: {final_color} | Embeddings: {len(embs)}")
-        self.api.send_async(self.api.send_tracking_embeddings,final_color, avg_emb.tolist(), self.camera_id)
+            self.api.send_async(self.api.send_embeddings, avg_emb.tolist())
+
+        print(f"[Tracker {self.camera_id}] Finalized ID {track_id} | Embeddings: {len(embs)}")
+
         self._cleanup_track_data(track_id)
 
         if track_id % 10 == 0:
@@ -317,16 +331,7 @@ class VehicleTracker:
                     under_cap = len(self.track_embeddings[track_id]) < self.max_embeddings_per_track
                     if is_moving and under_cap and self.frame_count % 2 == 0:
                         h, w = inference_frame.shape[:2]
-                        if int(self.camera_id) != 2:
-                            padding_ratio = 0.2
-                            box_w = x2 - x1
-                            pad_w = int(box_w * padding_ratio)
-                            x1p = max(0, x1 - pad_w)
-                            y1p = max(0, y1)
-                            x2p = min(w, x2 + pad_w)
-                            y2p = min(h, y2)
-                        else:
-                           x1p, y1p, x2p, y2p = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
+                        x1p, y1p, x2p, y2p = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
 
                         crop = inference_frame[y1p:y2p, x1p:x2p].copy()
 
@@ -335,12 +340,13 @@ class VehicleTracker:
                             if int(self.camera_id) == 2:
                                 w = 150
                             if crop.shape[1] >= w and crop.shape[0] >= 80:
-                                self.save_crop_for_debug(crop)
+                                # self.save_crop_for_debug(crop)
                                 emb = self.get_embedding(crop)
                                 if emb is not None:
                                     self.track_embeddings[track_id].append(emb)
                                 if track_id not in self.track_colors:
                                     self.track_colors[track_id] = []
+                                # if int(self.camera_id) != 2:
                                 color = self.getColor(crop)
                                 self.track_colors[track_id].append(color)
 

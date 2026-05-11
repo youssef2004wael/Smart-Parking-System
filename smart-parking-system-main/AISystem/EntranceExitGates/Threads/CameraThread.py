@@ -1,3 +1,5 @@
+import queue
+
 import cv2
 import threading
 import time
@@ -77,8 +79,12 @@ class CameraThread(threading.Thread):
 
             self.fail_count = 0
 
-            frame = cv2.resize(frame, (960, 540))
-            self.gate.frame = frame
-
+            # frame = cv2.resize(frame, (960, 540))
+            #new changes
+            # self.gate.frame = frame
+            try:
+                self.gate.frame_queue.put(frame, timeout=1)
+            except queue.Full:
+                continue
         if self.cap:
             self.cap.release()

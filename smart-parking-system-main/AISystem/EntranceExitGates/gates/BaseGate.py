@@ -4,6 +4,10 @@ from ultralytics import YOLO
 
 from AISystem.APIClient import APIClient
 from datetime import datetime
+from collections import Counter
+
+from AISystem.EntranceExitGates.CarDetails import CarDetails
+from AISystem.tracknav.color import CarColorRecognizer
 
 
 class BaseGate:
@@ -21,6 +25,7 @@ class BaseGate:
 
         self.frame = None
         self.output_frame = None
+        self.color_buffers = {}
 
         self.car_model = YOLO(car_model_path)
         self.plate_model = YOLO(plate_model_path)
@@ -163,6 +168,14 @@ class BaseGate:
     def should_enhance(self):
         current_hour = datetime.now().hour
         return current_hour >= 19 or current_hour < 6
+    def predict_color(self,image):
+        # recognizer = CarColorRecognizer()
+        # color = recognizer.predict(image)
+        details = CarDetails()
+        return details.get_car_details(image)
+
+
+
 
     def process_results(self, frame, results):
 
@@ -201,6 +214,12 @@ class BaseGate:
 
             if len(self.frame_buffers[track_id]) > 10:
                 self.frame_buffers[track_id].pop(0)
+            if track_id not in self.color_buffers:
+                self.color_buffers[track_id] = []
+
+            if len(self.color_buffers[track_id]) < 5:
+                color = self.predict_color(crop)
+                self.color_buffers[track_id].append(color)
 
             current_position = self.is_crossing_line(
                 (cx, cy),
@@ -220,12 +239,15 @@ class BaseGate:
 
                         if best_frame is not None:
                             plate = self.detect_and_draw_plate(best_frame)
+                            vehicle_colors = self.color_buffers.get(track_id, ["Unknown"])
+                            print(vehicle_colors)
+                            most_common_color = Counter(vehicle_colors).most_common(1)[0][0]
 
                             if plate =='':
                                 plate = 'None'
                             # embedding = self.get_embedding(best_frame)
                             # print("Embedding:", embedding)
-                            self.api.send_async(self.api.send_to_backend,best_frame, plate)
+                            self.api.send_async(self.api.send_to_backend,best_frame, plate,most_common_color)
 
 
                         self.processed_ids.add(track_id)
