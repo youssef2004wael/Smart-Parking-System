@@ -1,17 +1,35 @@
-venv/
-*.pyc
+# Python & Django (Essential for Backend)
 __pycache__/
-db.sqlite3
+*.py[cod]
+*$py.class
+venv/
 .env
+db.sqlite3
 media/
+static/
 
-/RealGarage/videos/*
-/videos/*
+# AI & Media Files
+*.pt
+*.jpg
+*.png
+videos/
 
-!/RealGarage/videos/.gitkeep
-!/videos/.gitkeep
+# Project Specific Folders
+gates/
+tracknav/
+slotscript/
 
-*.mp4
-*.avi
-*.mkv
-*.zip
+# Miscellaneous & IDEs
+.idea/
+.vscode/
+*.log
+*.swp
+.DS_Store
+
+# Mobile/Flutter (From the other branch)
+**/doc/api/
+.dart_tool/
+/build/
+/android/app/debug
+/android/app/profile
+/android/app/release

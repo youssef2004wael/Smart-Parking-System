@@ -39,7 +39,7 @@ class SlotDisplaySerializer(serializers.ModelSerializer):
 
 class ReservationSerializer(serializers.ModelSerializer):
     # رقم اللوحة مهم جداً لأن الأمن سيعتمد عليه
-    license_plate = serializers.CharField(write_only=True)
+    license_plate = serializers.CharField()
     slot_number = serializers.CharField(source='slot.slot_number', read_only=True)
 
     class Meta:

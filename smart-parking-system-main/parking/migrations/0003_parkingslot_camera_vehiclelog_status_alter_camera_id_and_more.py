@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('parking', '0002_reservation_license_plate'),
+        ('parking', '0002_vehiclelog_car_embedding_vehiclelog_last_camera'),
     ]
 
     operations = [

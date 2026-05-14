@@ -5,12 +5,12 @@ from rest_framework.views import APIView
 from rest_framework import permissions
 from rest_framework import status
 
-
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from django.db.models import Count
 from django.utils import timezone
 from django.db import transaction
+from datetime import timedelta
 from decimal import Decimal
 
 from .serializers import VehicleEntrySerializer, VehicleExitSerializer, SlotDisplaySerializer, ReservationSerializer, VehicleTrackSerializer, SlotStatusUpdateSerializer
@@ -19,14 +19,26 @@ from .pathfinding import astar, get_road_cell_next_to_slot
 from .permissions import IsCameraNode, IsOwnerOrAdmin
 from .grid import GARAGE_GRID, SLOT_COORDINATES
 
-from django.utils import timezone
-from datetime import timedelta
-
 import numpy as np
+import logging
+import json
 import uuid
 import math
+import re
 
 ENTRANCE = (0, 1)   # ENTER cell
+SIMILAR_COLORS = {
+    'black':  ['gray', 'blue', 'brown'],
+    'silver': ['gray', 'white', 'blue'],
+    'gray':   ['silver', 'black', 'blue'],
+    'white':  ['silver', 'gray'],
+    'blue':   ['black', 'gray', 'silver'],
+    'brown':  ['beige', 'black'],
+    'beige':  ['brown', 'white', 'yellow'],
+    'yellow': ['beige', 'brown'],
+    'red':    ['red'],
+    'green':  ['green'],
+}
 
 class VehicleEntryAPIView(APIView):
     permission_classes = [IsCameraNode]
@@ -346,43 +358,79 @@ def navigation_view(request, slot_number: str):
         ],
     })
 
+logger = logging.getLogger('tracking_logger')
 class VehicleTrackingAPIView(APIView):
     """
     تتبع السيارة عبر الكاميرات الداخلية باستخدام مقارنة البصمات (Embeddings) في الذاكرة.
     بدون استخدام pgvector.
-    """
+    """ 
     permission_classes = [IsCameraNode]
 
     def post(self, request, *args, **kwargs):
+        # print("Incoming Data:", request.data)
+        # ________
+        incoming_data = request.data.copy()
+        if 'car_embedding' in incoming_data:
+            incoming_data['car_embedding'] = f"List of {len(incoming_data['car_embedding'])} elements"
+        logger.debug(f"------ New Request ------\nPayload: {json.dumps(request.data, indent=2)}")
+        # ________
         serializer = VehicleTrackSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         v_data = serializer.validated_data
+        raw_camera_id = v_data['camera_id']  # القيمة: "CAM-06"
+        # camera_id = v_data['camera_id']
         incoming_embedding = np.array(v_data['car_embedding'])
-        camera_id = v_data['camera_id']
         color_hint = v_data.get('car_color')
+        incoming_color = v_data.get('car_color', 'unknown').lower()
 
-        time_threshold = timezone.now() - timedelta(minutes=2)
+        extracted_id = re.findall(r'\d+', raw_camera_id)
+        camera_numeric_id = int(extracted_id[0]) if extracted_id else None
+        if camera_numeric_id is None:
+            return Response({"error": "Invalid camera format"}, status=400)
+        CAMERA_PATHS = {
+            1: [1],          # بوابة الدخول
+            2: [1],          # كاميرا 2 لازم تكون جاية من 1
+            3: [2],          # كاميرا 3 لازم تكون جاية من 2
+            4: [3, 2],       # كاميرا 4 لازم تكون جاية من 3
+            5: [1, 2],       # 2,كاميرا 5 لازم تكون جاية من 1
+            6: [5],          # كاميرا 6 لازم تكون جاية من 5
+            7: [5, 6],          # كاميرا 7 لازم تكون جاية من 6
+            8: [4, 7],       # كاميرا 8 (المخرج) ممكن تكون جاية من مسار 4 أو مسار 7
+        }
+        # تحديد الكاميرات السابقة المسموح بها بناءً على الخريطة
+        allowed_previous_cameras = CAMERA_PATHS.get(camera_numeric_id, [])
+
+        time_threshold = timezone.now() - timedelta(minutes=3)  
 
         # 1. فلترة ذكية لتقليل حجم البيانات المسحوبة (Optimization)
         queryset = VehicleLog.objects.filter(
             is_inside=True,
             status='moving',
-            last_seen__gte=time_threshold
+            last_seen__gte=time_threshold,
+            car_embedding__isnull=False,
+            last_camera_id__in=allowed_previous_cameras
         )
+        print(f"allowed_previous_cameras for camera {camera_numeric_id}: {allowed_previous_cameras}")
 
-        if color_hint and color_hint != 'unknown':
-            queryset = queryset.filter(car_color=color_hint)
+        # if color_hint and color_hint != 'unknown':
+        #     queryset = queryset.filter(car_color=color_hint)
 
-        logs = queryset.only('id', 'license_plate', 'car_embedding')
+        logs = queryset.only('id', 'license_plate', 'car_embedding', 'car_color')
+        # ________
 
         if not logs.exists():
+            response_data = {
+                "status": "debug",
+                "message": "No active vehicles match the criteria"
+            }
+            logger.info(f"Response\nPre-Comparison Debug Info: {json.dumps(response_data, indent=2)}")
             return Response({"status": "unknown", "message": "No active vehicles match the criteria"}, status=404)
 
         # 2. عملية البحث عن أقرب تطابق باستخدام Cosine Similarity
         best_match = None
-        max_similarity = -1  # Cosine similarity range: [-1, 1], higher = more similar
+        max_combined_score = -1  # Cosine similarity range: [-1, 1], higher = more similar
         SIMILARITY_THRESHOLD = 0.80  # يجب أن يكون التشابه 80% أو أكثر
 
         # ✅ تطبيع البصمة الواردة مرة واحدة خارج الحلقة (Optimization)
@@ -395,35 +443,55 @@ class VehicleTrackingAPIView(APIView):
         similarity_results = []
 
         for log in logs:
-            existing_embedding = np.array(log.car_embedding)
+            if log.car_embedding is None:
+                continue  # تخطي السجلات اللي ما فيهاش بصمة (فاسدة) أو ما تم تحديثهاش بعد
+            try:
+                existing_embedding = np.array(log.car_embedding)
 
-            # تطبيع البصمة المخزنة
-            existing_norm = np.linalg.norm(existing_embedding)
-            if existing_norm == 0:
-                continue  # تخطي البصمات الصفرية الفاسدة
+                # تطبيع البصمة المخزنة
+                existing_norm = np.linalg.norm(existing_embedding)
+                if existing_norm == 0:
+                    continue  # تخطي البصمات الصفرية الفاسدة
 
-            existing_normalized = existing_embedding / existing_norm
+                existing_normalized = existing_embedding / existing_norm
 
-            # حساب Cosine Similarity = dot product of two normalized vectors
-            similarity = float(np.dot(incoming_normalized, existing_normalized))
+                # حساب Cosine Similarity = dot product of two normalized vectors
+                cosine_sim = float(np.dot(incoming_normalized, existing_normalized))
 
-            # 📊 تسجيل نتيجة كل مقارنة
-            similarity_results.append({
-                "license_plate": log.license_plate,
-                "similarity_score": round(similarity, 4),
-                "passed_threshold": similarity >= SIMILARITY_THRESHOLD
-            })
+                existing_color = (log.car_color or 'unknown').lower()
+                color_score = 0
+                if incoming_color == 'unknown' or existing_color == 'unknown':
+                    color_score = 0.5  # محايد لو اللون مش معروف
+                elif incoming_color == existing_color:
+                    color_score = 1.0  # تطابق تام
+                elif existing_color in SIMILAR_COLORS.get(incoming_color, []):
+                    color_score = 0.6  # لون قريب (ممكن تعدل القيمة دي حسب التجربة)
+                else:
+                    color_score = 0.0  # لون مختلف تماماً    
+                
+                combined_score = (cosine_sim * 0.85) + (color_score * 0.15)
 
-            if similarity > max_similarity:
-                max_similarity = similarity
-                best_match = log
+                similarity_results.append({
+                    "license_plate": log.license_plate,
+                    "combined_score": round(combined_score, 4),
+                    "embedding_sim": round(cosine_sim, 4),
+                    "color_match": existing_color,
+                    "passed": combined_score >= SIMILARITY_THRESHOLD
+                })
 
+                if combined_score > max_combined_score:
+                    max_combined_score = combined_score
+                    best_match = log
+            except Exception as e:
+                # لو حصل أي مشكلة في تحويل نوع البيانات، كمل وموقعش السيرفر
+                print(f"Error processing embedding for {log.license_plate}: {e}")
+                continue
         # ترتيب النتائج تنازلياً حسب التشابه للعرض
-        similarity_results.sort(key=lambda x: x["similarity_score"], reverse=True)
+        similarity_results.sort(key=lambda x: x["combined_score"], reverse=True)
 
         # 3. التحقق من عتبة الثقة (Thresholding)
-        if best_match and max_similarity >= SIMILARITY_THRESHOLD:
-            camera = get_object_or_404(Camera, camera_id=camera_id)
+        if best_match and max_combined_score >= SIMILARITY_THRESHOLD:
+            camera = get_object_or_404(Camera, camera_id=raw_camera_id)
             tracking_msg = f"Vehicle {best_match.license_plate} tracked at {camera.zone_name}"
             best_match.last_camera = camera
             best_match.last_seen = timezone.now()
@@ -440,25 +508,54 @@ class VehicleTrackingAPIView(APIView):
 
             best_match.save(update_fields=['last_camera', 'last_seen', 'status'])
 
-            return Response({
+            # ________
+            response_data = {
                 "status": "success",
                 "identified_plate": best_match.license_plate,
-                "confidence_score": round(max_similarity, 4),
+                "confidence_score": round(max_combined_score, 4),
+                "color_score": round(color_score, 4),
                 "current_zone": camera.zone_name,
                 "message": f"Vehicle {best_match.license_plate} tracked at {camera.zone_name}",
                 "tracking_msg": tracking_msg,
                 # 📊 نتائج التشابه لكل المركبات المقارنة
                 "all_similarity_scores": similarity_results
+                }
+            
+            logger.info(f"Response Sent: {json.dumps(response_data, ensure_ascii=False)}")
+            # ________
+            return Response({
+                "status": "Matched with High Confidence (>= 0.89) Omar's Algorithm",
+                "identified_plate": best_match.license_plate,
+                "embedding_score": round(cosine_sim, 4),
+                "color_score": round(color_score, 4),
+                "confidence_score": round(max_combined_score, 4),
+                "current_zone": camera.zone_name,
+                "message": f"Vehicle {best_match.license_plate} tracked at {camera.zone_name}",
+                "tracking_msg": tracking_msg,
+                "all_similarity_scores": similarity_results
             }, status=200)
 
         # 4. حالة الفشل في التعرف — نرجع النتائج حتى لو فشل التعرف
-        return Response({
-            "status": "unknown",
+        #______
+        response_data = {
+            "status": "Not Identified",
             "message": "Vehicle detected but could not be identified with high confidence",
-            "best_similarity_score": round(max_similarity, 4) if max_similarity > -1 else None,
+            "color_score": round(color_score, 4) if 'color_score' in locals() else None,
+            "embedding_score": round(cosine_sim, 4) if 'cosine_sim' in locals() else None,
+            "confidence_score": round(max_combined_score, 4) if 'max_combined_score' in locals() else None,
             "all_similarity_scores": similarity_results
-        }, status=404)
-    
+        }
+        logger.info(f"Response Sent: {json.dumps(response_data, ensure_ascii=False , indent=2)}")        
+        #______
+
+
+        return Response({
+            "status": "Not Identified",
+            "message": "Vehicle detected but could not be identified with high confidence",
+            "Highest Confidence Score": round(max_combined_score, 4) if max_combined_score > -1 else None,
+            "all_similarity_scores": similarity_results
+        }, status=404)  
+
 class UpdateEntryEmbeddingAPIView(APIView):
     """
     تحديث بصمة السيارة (Embedding) من المنظور الأمامي إلى المنظور العلوي
@@ -600,3 +697,51 @@ class ExtendReservationAPIView(APIView):
             "new_end_time": reservation.end_time.isoformat(),
         })
 
+class MyReservationsListAPIView(ListAPIView):
+    """
+    عرض حجوزات المستخدم (النشطة والسابقة) مع تحديث تلقائي للحالة.
+    تُستخدم في واجهة Booking History و Countdown في تطبيق الموبايل.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = ReservationSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        now = timezone.now()
+
+        # 1. تحديث الحجوزات المنتهية تلقائياً (Housekeeping)
+        # نبحث عن أي حجز نشط وقته انتهى
+        expired_reservations = Reservation.objects.filter(
+            user=user,
+            is_active=True,
+            end_time__lt=now
+        )
+
+        if expired_reservations.exists():
+            # تحديث حالات الـ Slots المرتبطة لتصبح متاحة مرة أخرى
+            slot_ids = expired_reservations.values_list('slot_id', flat=True)
+            ParkingSlot.objects.filter(
+                id__in=slot_ids, 
+                status='reserved'
+            ).update(status='available')
+            
+            # إنهاء حالة النشاط للحجوزات
+            expired_reservations.update(is_active=False)
+
+        # 2. جلب قائمة الحجوزات بأفضل أداء (Optimization)
+        # نستخدم select_related لسحب بيانات الـ slot مع الحجز في query واحد
+        # ونستخدم prefetch_related لو فيه بيانات تانية مرتبطة (مثل منطقة الباركينج)
+        return Reservation.objects.filter(user=user)\
+            .select_related('slot', 'slot__camera')\
+            .order_by('-is_active', '-created_at')
+
+    def list(self, request, *args, **kwargs):
+        # لمسة إضافية: لو عايز تضيف بيانات في الـ header أو metadata
+        response = super().list(request, *args, **kwargs)
+        # مثال: إضافة إجمالي عدد الحجوزات النشطة في الرد
+        active_count = Reservation.objects.filter(user=request.user, is_active=True).count()
+        response.data = {
+            "active_count": active_count,
+            "results": response.data
+        }
+        return response
