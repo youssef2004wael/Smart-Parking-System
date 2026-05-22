@@ -1,0 +1,162 @@
+{
+    "1": {
+        "camera_id": "CAM-01",
+        "source": "videos/new/D2_day.mp4",
+        "roi": [
+            [
+                632,
+                352
+            ],
+            [
+                5,
+                344
+            ],
+            [
+                12,
+                133
+            ],
+            [
+                632,
+                142
+            ]
+        ],
+        "zone": "entrancee "
+    },
+    "2": {
+        "camera_id": "CAM-02",
+        "source": "videos/new/D4_day.mp4",
+        "roi": [
+            [
+                337,
+                193
+            ],
+            [
+                190,
+                295
+            ],
+            [
+                102,
+                219
+            ],
+            [
+                248,
+                129
+            ]
+        ],
+        "zone": "After_entrance"
+    },
+    "3": {
+        "camera_id": "CAM-03",
+        "source": "videos/new/D8_day.mp4",
+        "roi": [
+            [
+                477,
+                351
+            ],
+            [
+                10,
+                210
+            ],
+            [
+                38,
+                187
+            ],
+            [
+                620,
+                306
+            ]
+        ],
+        "zone": "After"
+    },
+    "4": {
+        "camera_id": "CAM-04",
+        "source": "videos/new/D3_day.mp4",
+        "roi": [
+            [
+                430,
+                261
+            ],
+            [
+                298,
+                231
+            ],
+            [
+                325,
+                200
+            ],
+            [
+                471,
+                230
+            ]
+        ],
+        "zone": "After"
+    },
+    "5": {
+        "camera_id": "CAM-05",
+        "source": "videos/new/D5_day.mp4",
+        "roi": [
+            [
+                637,
+                258
+            ],
+            [
+                5,
+                248
+            ],
+            [
+                6,
+                174
+            ],
+            [
+                637,
+                175
+            ]
+        ],
+        "zone": "After"
+    },
+    "6": {
+        "camera_id": "CAM-06",
+        "source": "videos/new/D7_day.mp4",
+        "roi": [
+            [
+                570,
+                324
+            ],
+            [
+                34,
+                356
+            ],
+            [
+                43,
+                303
+            ],
+            [
+                396,
+                256
+            ]
+        ],
+        "zone": "After"
+    },
+    "7": {
+        "camera_id": "CAM-07",
+        "source": "videos/new/D6_day.mp4",
+        "roi": [
+            [
+                526,
+                162
+            ],
+            [
+                75,
+                164
+            ],
+            [
+                83,
+                124
+            ],
+            [
+                531,
+                109
+            ]
+        ],
+        "zone": "After"
+    }
