@@ -20,7 +20,7 @@
                 142
             ]
         ],
-        "zone": "entrancee "
+        "zone": "entrancee"
     },
     "2": {
         "camera_id": "CAM-02",
@@ -160,3 +160,4 @@
         ],
         "zone": "After"
     }
+}
