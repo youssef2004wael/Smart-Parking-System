@@ -38,7 +38,7 @@ class _ModelRegistry:
                 return
 
             self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-             clip_path = r"F:\Graduation project\Smart-Parking-System-AISystem\Smart-Parking-System-AISystem\smart-parking-system-main\AISystem\Models\clip_local"  # The folder where you saved the model
+            clip_path = r"F:\Graduation project\Smart-Parking-System-AISystem\Smart-Parking-System-AISystem\smart-parking-system-main\AISystem\Models\clip_local"  # The folder where you saved the model
 
             if os.path.exists(clip_path):
                 print(f"[ModelRegistry] Loading CLIP from LOCAL DISK: {clip_path}")
