@@ -47,7 +47,7 @@ def main():
     ModelRegistry.initialize(device="cuda")
     get_camera_manager()
 
-    gate_ids = [2, 5, 6, 7, 4]
+    gate_ids = [2,4,5,6,7]
 
     engine = BatchDetectionEngine("yolov8n.pt", batch_size=5)
     engine.start()
@@ -58,10 +58,10 @@ def main():
     ]
 
     entrance_gate = EntranceGate(
-        source="videos/D02_day.mp4",
+        source= r"videos/new/D2_day.mp4",
         car_model_path="../Models/car_detection/yolov8n.pt",
         plate_model_path="../Models/plate_detection/best.pt",
-        plate_recognition_path="../Models/plate_recognition/best.pt",
+        plate_recognition_path="../Models/plate_recognition/best_arabic.pt",
         backend_url="http://72.62.6.246:8000/api/entry/"
     )
 

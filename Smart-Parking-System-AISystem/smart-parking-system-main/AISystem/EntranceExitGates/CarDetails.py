@@ -269,8 +269,11 @@ class CarDetails:
         with torch.no_grad():
             outputs = self.clip_model(**inputs)
         probs = outputs.logits_per_image.softmax(dim=1)[0]
+        best_idx = probs.argmax().item()
         color = self.color_names[probs.argmax().item()]
-        return color
+        confidence = probs[best_idx].item()
+
+        return color , confidence
 
     def get_car_brand_yolo(self,bgr_image):
 
@@ -284,15 +287,46 @@ class CarDetails:
 
     def get_car_details(self,image):
         try:
-            color = self.getColor(image)
+            # img = self.segment_car_with_mask(image)
+            color,confidence = self.getColor(image)
             # brand = self.get_car_brand_yolo(image)
 
-            return color.lower()
+            return color,confidence
         except Exception as e:
             print(f"Error getting car details: {e}")
             # Return default values
-            return "Unknown", np.zeros(512)  # Adjust 2048 to match your ResNet output
+            return "Unknown", np.zeros(512)  # Adjust 2048 to match your ResNet output size
 
+    def get_side_color(self, image):
+
+        h, w = image.shape[:2]
+
+        # crop جسم العربية فقط
+        body = image[
+            int(h * 0.45):int(h * 0.9),
+            int(w * 0.08):int(w * 0.92)
+        ]
+
+        img_rgb = cv2.cvtColor(body, cv2.COLOR_BGR2RGB)
+
+        inputs = self.clip_processor(
+            text=self.car_colors,
+            images=Image.fromarray(img_rgb),
+            return_tensors="pt",
+            padding=True
+        ).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.clip_model(**inputs)
+
+        probs = outputs.logits_per_image.softmax(dim=1)[0]
+
+        best_idx = probs.argmax().item()
+
+        color = self.color_names[best_idx]
+        confidence = probs[best_idx].item()
+
+        return color, confidence
 
 
 

@@ -27,8 +27,8 @@ class EntranceGate(BaseGate):
         self.start_right =  (762, 533)
         self.end_right = (851, 273)
 
-        self.start_trigger =(104, 253)
-        self.end_trigger = (773, 496)
+        self.start_trigger =(6, 272)
+        self.end_trigger = (664, 538)
 
 
         # self.start_left = (5, 361)

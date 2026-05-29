@@ -4,7 +4,6 @@ from ultralytics import YOLO
 
 from AISystem.APIClient import APIClient
 from datetime import datetime
-from collections import Counter
 
 from AISystem.EntranceExitGates.CarDetails import CarDetails
 
@@ -32,10 +31,36 @@ class BaseGate:
         self.previous_side = {}
         self.processed_ids = set()
         self.frame_buffers = {}
+        self.color_buffers = {}
+        self.color_collect_started = {}
+
+        self.color_trigger_margin = 60
 
         self.api = APIClient(backend_url)
 
     # =========================
+    def point_to_line_distance(self, point, line_start, line_end):
+
+        px, py = point
+        x1, y1 = line_start
+        x2, y2 = line_end
+
+        numerator = abs(
+            (y2 - y1) * px -
+            (x2 - x1) * py +
+            x2 * y1 -
+            y2 * x1
+        )
+
+        denominator = np.sqrt(
+            (y2 - y1) ** 2 +
+            (x2 - x1) ** 2
+        )
+
+        if denominator == 0:
+            return 9999
+
+        return numerator / denominator
 
     def calculate_sharpness(self, image):
 
@@ -44,24 +69,6 @@ class BaseGate:
         lap = cv2.Laplacian(gray, cv2.CV_64F)
 
         return lap.var()
-
-    # =========================
-    # def get_embedding(self,image):
-    #     color_coverted = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    #     pil_image = Image.fromarray(color_coverted)
-    #     model = resnet50(weights=ResNet50_Weights.DEFAULT)
-    #     model = torch.nn.Sequential(*(list(model.children())[:-1]))  # Strips the last layer
-    #     model.eval()
-    #     preprocess = T.Compose([
-    #         T.Resize((224, 224)),
-    #         T.ToTensor(),
-    #         T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    #     ])
-    #     input_tensor = preprocess(pil_image).unsqueeze(0)
-
-    #     with torch.no_grad():
-    #         embedding = model(input_tensor)
-    #     return embedding.flatten().numpy()
 
     def get_best_frame(self, track_id):
 
@@ -85,7 +92,7 @@ class BaseGate:
 
         return best_crop
 
-    # ========================
+    # =========================
 
     def is_crossing_line(self, point, line_start, line_end):
 
@@ -116,6 +123,7 @@ class BaseGate:
 
         return plate_text
     def detect_and_draw_plate(self, frame):
+
         plate_results = self.plate_model(frame, verbose=False)
 
         for r in plate_results:
@@ -166,89 +174,153 @@ class BaseGate:
     def should_enhance(self):
         current_hour = datetime.now().hour
         return current_hour >= 19 or current_hour < 6
-    def predict_color(self,image):
-        # recognizer = CarColorRecognizer()
-        # color = recognizer.predict(image)
+
+    def predict_color(self, image):
+
         details = CarDetails()
-        return details.get_car_details(image)
+        color, confidence = details.get_car_details(image)
+
+        return color, confidence
+
+    def get_weighted_color(self, track_id):
+
+        if track_id not in self.color_buffers:
+            return "Unknown"
+
+        scores = {}
+
+        for color, confidence in self.color_buffers[track_id]:
+
+            if color not in scores:
+                scores[color] = 0
+
+            scores[color] += confidence
+
+        if not scores:
+            return "Unknown"
+
+        final_color = max(scores, key=scores.get)
+
+        return final_color
 
 
 
+    def trigger_gate_action(self, track_id):
+        self.processed_ids.add(track_id)
+
+        plate = 'None'
+        best_frame = None
+
+        # Check if we buffered a high-quality pre-emptive plate read
+        if track_id in self.best_plates_so_far:
+            plate = self.best_plates_so_far[track_id]['plate']
+            best_frame = self.best_plates_so_far[track_id]['frame']
+        else:
+            # Fallback to absolute sharpest buffered frame if text reading failed during approach
+            best_frame = self.get_best_frame(track_id)
+            if best_frame is not None:
+                plate = self.detect_and_draw_plate(best_frame)
+
+        if not plate or plate.strip() == '':
+            plate = 'None'
+
+        most_common_color = self.get_weighted_color(track_id)
+
+        if best_frame is not None:
+            print(f"🚀 [GATE API] Dispatching ID {track_id} | Plate: {plate} | Color: {most_common_color}")
+            self.api.send_to_backend(best_frame, plate, most_common_color)
 
     def process_results(self, frame, results):
-
-        # if self.should_enhance():
-        #     frame = self.enhance_plate(frame)
-
         if results[0].boxes.id is None:
             return
 
         boxes = results[0].boxes.xyxy.cpu().numpy()
         track_ids = results[0].boxes.id.cpu().numpy().astype(int)
-
         roi_polygon = self.get_roi_polygon()
 
-        for box, track_id in zip(boxes, track_ids):
+        # Initialize dictionaries in your init if not present
+        if not hasattr(self, 'best_plates_so_far'):
+            self.best_plates_so_far = {}
+        if not hasattr(self, 'has_crossed_trigger'):
+            self.has_crossed_trigger = {}
 
+        active_ids = set(track_ids)
+
+        for box, track_id in zip(boxes, track_ids):
             x1, y1, x2, y2 = map(int, box)
 
-
+            # Using bottom center for intersection line tracking
             cx = (x1 + x2) // 2
             cy = y2
 
+            # Check if vehicle is inside valid processing zone
             if cv2.pointPolygonTest(roi_polygon, (cx, cy), False) < 0:
                 continue
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-
             crop = frame[y1:y2, x1:x2]
 
-
-
+            # 1. Maintain Frame Buffer for Sharpness
             if track_id not in self.frame_buffers:
                 self.frame_buffers[track_id] = []
-
             self.frame_buffers[track_id].append(crop.copy())
-
             if len(self.frame_buffers[track_id]) > 10:
                 self.frame_buffers[track_id].pop(0)
+
+            # 2. Maintain Color Buffers
             if track_id not in self.color_buffers:
                 self.color_buffers[track_id] = []
 
-            crop_area = (x2 - x1) * (y2 - y1)
-            if crop_area > 15000 and len(self.color_buffers[track_id]) < 5:
-                color = self.predict_color(crop)
-                self.color_buffers[track_id].append(color)
+            # Measure spatial relationship to line
+            distance = self.point_to_line_distance((cx, cy), self.start_trigger, self.end_trigger)
+            current_side = self.is_crossing_line((cx, cy), self.start_trigger, self.end_trigger)
 
-            current_position = self.is_crossing_line(
-                (cx, cy),
-                self.start_trigger,
-                self.end_trigger
-            )
+            # Convert cross product sign to standard state (1 or -1)
+            current_state = 1 if current_side >= 0 else -1
 
-            previous_position = self.previous_side.get(track_id)
+            # 3. Active Capturing Zone (While approaching or near trigger)
+            if distance < self.color_trigger_margin:
+                # Capture Color data early
+                if len(self.color_buffers[track_id]) < 15:
+                    color, confidence = self.predict_color(crop)
+                    self.color_buffers[track_id].append((color, confidence))
 
-            if previous_position is not None:
+                # Active Plate Recognition buffering: continually update with the cleanest image available
+                current_plate = self.detect_and_draw_plate(crop)
+                if current_plate and current_plate != "None" and current_plate.strip() != "":
+                    # If we don't have a plate yet, or if the current crop is sharper than our saved one
+                    if track_id not in self.best_plates_so_far or self.calculate_sharpness(
+                            crop) > self.calculate_sharpness(self.best_plates_so_far[track_id]['frame']):
+                        self.best_plates_so_far[track_id] = {
+                            'plate': current_plate,
+                            'frame': crop.copy()
+                        }
 
+            # 4. Robust Trigger Evaluation
+            previous_state = self.previous_side.get(track_id)
 
-                if previous_position * current_position < 0:
-                    if track_id not in self.processed_ids:
+            if previous_state is not None and previous_state != current_state:
+                # Sign flip occurred! Car crossed the threshold line
+                if track_id not in self.processed_ids:
+                    self.trigger_gate_action(track_id)
 
-                        best_frame = self.get_best_frame(track_id)
+            # Save historical state
+            self.previous_side[track_id] = current_state
 
-                        if best_frame is not None:
-                            plate = self.detect_and_draw_plate(best_frame)
-                            vehicle_colors = self.color_buffers.get(track_id, ["Unknown"])
-                            print(vehicle_colors)
-                            most_common_color = Counter(vehicle_colors).most_common(1)[0][0]
+        # ==================================================================
+        # CRITICAL SAFETY CLEANUP FOR SHORT LINES & EDGE DROPOUTS
+        # ==================================================================
+        # If a car was tracked, inside our margin zone, but disappears from the frame
+        # tracking array before a clean mathematical crossing equation is met.
+        for tracked_id in list(self.previous_side.keys()):
+            if tracked_id not in active_ids:
+                # Car dropped out of frame pipeline completely
+                if tracked_id not in self.processed_ids:
+                    # Did we capture a valid plate while it was in our buffer zone?
+                    if tracked_id in self.best_plates_so_far:
+                        print(f"[Safety Trigger]: ID {tracked_id} lost near line boundary. Forcing API call.")
+                        self.trigger_gate_action(tracked_id)
 
-                            if plate =='':
-                                plate = 'None'
-                            # embedding = self.get_embedding(best_frame)
-                            # print("Embedding:", embedding)
-                            self.api.send_async(self.api.send_to_backend,best_frame, plate,most_common_color)
-
-
-                        self.processed_ids.add(track_id)
-
-            self.previous_side[track_id] = current_position
+                # Clean up memory allocation maps for dead tracks
+                self.previous_side.pop(tracked_id, None)
+                self.best_plates_so_far.pop(tracked_id, None)

@@ -79,16 +79,16 @@ class APIClient:
         except requests.exceptions.RequestException as e:
             print("❌ Request failed:", str(e))
 
-    def send_to_backend(self, image, plate_text,color):
+    def send_to_backend(self, image, plate_text, color):
         if image is None:
             print("No image to send")
             return
 
         if self.base_url.endswith("/entry/"):
-            self.send_to_entrance(image,plate_text,color)
+            self.send_async(self.send_to_entrance, image, plate_text, color)
 
         elif self.base_url.endswith("/exit/"):
-            self.end_to_exit(image,plate_text)
+            self.send_async(self.send_to_exit, image, plate_text)
 
     def send_embeddings(self,embedding):
         base_url = "http://72.62.6.246:8000/api/update-perspective/"

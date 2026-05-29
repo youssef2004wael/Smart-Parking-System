@@ -142,22 +142,10 @@ class VehicleTracker:
         dist = np.linalg.norm(np.array(points[-1]) - np.array(points[-3]))
         return dist < self.STATIONARY_THRESHOLD
 
-
-    def getColor(self, car_crop) -> str:
+    def getColor(self, car_crop):
         cardetails = CarDetails()
-        color = cardetails.get_car_details(car_crop)
-        return color
-        # img_rgb = cv2.cvtColor(car_crop, cv2.COLOR_BGR2RGB)
-        # inputs = self.clip_processor(
-        #     text=self.car_colors,
-        #     images=Image.fromarray(img_rgb),
-        #     return_tensors="pt",
-        #     padding=True,
-        # ).to(self.device)
-        # with torch.no_grad():
-        #     outputs = self.clip_model(**inputs)
-        # probs = outputs.logits_per_image.softmax(dim=1)[0]
-        # return self.color_names[probs.argmax().item()]
+        color, confidence = cardetails.get_side_color(car_crop)
+        return color, confidence
 
 
     def get_embedding(self, img) -> np.ndarray:
@@ -190,12 +178,20 @@ class VehicleTracker:
         avg_emb = np.array(embs).mean(axis=0)
         avg_emb /= (np.linalg.norm(avg_emb) + 1e-6)
         if int(self.camera_id) != 2:
-           # self.api.send_async(self.api.send_tracking_embeddings, avg_emb.tolist())
+            # self.api.send_async(self.api.send_tracking_embeddings, avg_emb.tolist())
             colors = self.track_colors.get(track_id, [])
             if colors:
                 print(colors)
-                final_color = Counter(colors).most_common(1)[0][0]
+                weighted_scores = defaultdict(float)
+
+                for color, confidence in colors:
+                    weighted_scores[color] += confidence
+
+                final_color = max(weighted_scores.items(), key=lambda x: x[1])[0]
+
+                print("Weighted Scores:", dict(weighted_scores))
                 self.api.send_async(self.api.send_tracking_embeddings, final_color, avg_emb.tolist(), camera_id)
+
             else:
                 final_color = "Unkown"
         else:
@@ -334,7 +330,7 @@ class VehicleTracker:
                         crop = inference_frame[y1p:y2p, x1p:x2p].copy()
 
                         if crop is not None and crop.size > 0:
-                            w = 200
+                            w = 150
                             if int(self.camera_id) == 2:
                                 w = 150
                             if crop.shape[1] >= w and crop.shape[0] >= 80:
@@ -348,8 +344,9 @@ class VehicleTracker:
                                     self.track_colors[track_id] = []
                                 # if int(self.camera_id) != 2:
                                 q = gpu.submit(self.getColor, crop)
-                                color = q.get()
-                                self.track_colors[track_id].append(color)
+                                color, confidence = q.get()
+
+                                self.track_colors[track_id].append((color, confidence))
 
 
                     # رسم البيانات للتصحيح (Debug)
