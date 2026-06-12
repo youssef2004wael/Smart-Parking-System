@@ -41,11 +41,12 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
     final theme = Theme.of(context);
     final lang = context.watch<LocaleProvider>().locale.languageCode;
 
+    // 🛠️ Smart Filtering: Ignore locally cancelled from Active, and force them into Past
     final active = provider.reservations
-        .where((r) => r.isActive && !r.isExpired)
+        .where((r) => r.isActive && !r.isExpired && !provider.isLocallyCancelled(r.id))
         .toList();
     final past = provider.reservations
-        .where((r) => !r.isActive || r.isExpired)
+        .where((r) => !r.isActive || r.isExpired || provider.isLocallyCancelled(r.id))
         .toList();
 
     return Directionality(
@@ -82,7 +83,7 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
                               AppStrings.get('pastReservations', lang),
                               theme.textTheme.bodySmall?.color ?? Colors.grey, past.length, theme),
                           const SizedBox(height: 8),
-                          ...past.map((r) => _buildPastCard(r, theme, lang)),
+                          ...past.map((r) => _buildPastCard(r, theme, lang, provider.isLocallyCancelled(r.id))),
                         ],
                       ],
                     ),
@@ -258,8 +259,9 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
     );
   }
 
-  Widget _buildPastCard(Reservation r, ThemeData theme, String lang) {
-    final isCancelled = !r.isActive && !r.isExpired;
+  Widget _buildPastCard(Reservation r, ThemeData theme, String lang, bool isLocallyCancelled) {
+    // 🛠️ If locally cancelled, force it to show as Cancelled even if backend is bugged
+    final isCancelled = isLocallyCancelled || (!r.isActive && !r.isExpired);
     final statusText = isCancelled
         ? AppStrings.get('cancelled', lang)
         : AppStrings.get('expired', lang);
@@ -289,7 +291,9 @@ class _BookingHistoryPageState extends State<BookingHistoryPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('${AppStrings.get('slot', lang)} ${r.slotNumber} - ${AppStrings.get('floor', lang)} ${r.floor}',
-                    style: theme.textTheme.titleMedium),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      decoration: isCancelled ? TextDecoration.lineThrough : TextDecoration.none,
+                    )),
                 const SizedBox(height: 2),
                 Text('${r.licensePlate} - ${DateFormat('MMM d, yyyy').format(r.startTime.toLocal())}',
                     style: theme.textTheme.bodySmall),

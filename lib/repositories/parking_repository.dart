@@ -64,7 +64,7 @@ class ParkingRepository {
           'end_time': endTime.toIso8601String(),
         },
       );
-      if (response.statusCode == 201 && response.data is Map<String, dynamic>) {
+      if ((response.statusCode == 200 || response.statusCode == 201) && response.data is Map<String, dynamic>) {
         return response.data as Map<String, dynamic>;
       }
       throw Exception('Failed to reserve slot (${response.statusCode})');
@@ -78,13 +78,24 @@ class ParkingRepository {
     try {
       final Response<dynamic> response =
           await _apiClient.get<dynamic>('/my-reservations/');
-      if (response.statusCode == 200 && response.data is List<dynamic>) {
-        final list = response.data as List<dynamic>;
-        return list
-            .whereType<Map<String, dynamic>>()
-            .where((json) => json['slot_type'] != 'entry' && json['slot_type'] != 'exit')
-            .map(Reservation.fromJson)
-            .toList();
+      if (response.statusCode == 200) {
+        // Backend now returns: {"active_count": X, "results": [...]}
+        if (response.data is Map<String, dynamic>) {
+          final data = response.data as Map<String, dynamic>;
+          final list = data['results'] as List<dynamic>? ?? [];
+          return list
+              .whereType<Map<String, dynamic>>()
+              .map(Reservation.fromJson)
+              .toList();
+        } 
+        // Fallback just in case they revert to a simple list
+        else if (response.data is List<dynamic>) {
+          final list = response.data as List<dynamic>;
+          return list
+              .whereType<Map<String, dynamic>>()
+              .map(Reservation.fromJson)
+              .toList();
+        }
       }
       throw Exception('Failed to load reservations (${response.statusCode})');
     } on DioException catch (e) {
@@ -99,7 +110,13 @@ class ParkingRepository {
         '/reservations/$reservationId/cancel/',
       );
       return response.statusCode == 200;
-    } on DioException {
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 400) {
+        final data = e.response?.data;
+        if (data is Map && data['error']?.toString().contains('already cancelled') == true) {
+          return true; 
+        }
+      }
       return false;
     }
   }
@@ -116,7 +133,6 @@ class ParkingRepository {
     }
   }
 
-  /// Force backend to cleanup expired reservations and free slots
   Future<bool> cleanupExpired() async {
     try {
       final Response<dynamic> response = await _apiClient.post<dynamic>(

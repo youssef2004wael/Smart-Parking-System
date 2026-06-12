@@ -27,6 +27,7 @@ class _ParkingPageState extends State<ParkingPage> with WidgetsBindingObserver {
   Timer? _countdownTimer;
   Timer? _slotsRefreshTimer;
   bool _wasActive = false;
+  bool _hasArrivedAtSlot = false;
   bool _isHandlingExpiry = false;
 
   @override
@@ -106,7 +107,7 @@ class _ParkingPageState extends State<ParkingPage> with WidgetsBindingObserver {
   Reservation? _getActiveReservation(ParkingProvider provider) {
     try {
       return provider.reservations.firstWhere(
-        (r) => r.isActive && !r.isExpired,
+        (r) => r.isActive && !r.isExpired && !provider.isLocallyCancelled(r.id),
       );
     } catch (_) {
       return null;
@@ -281,12 +282,18 @@ class _ParkingPageState extends State<ParkingPage> with WidgetsBindingObserver {
                 ),
               ),
               const SizedBox(height: 20),
+              if (!_hasArrivedAtSlot)
               SizedBox(
                 width: double.infinity, height: 52,
                 child: ElevatedButton.icon(
-                  onPressed: () => Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => NavigationPage(
-                          slotId: r.slotNumber, licensePlate: r.licensePlate))),
+                  onPressed: () async {
+                    final result = await Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => NavigationPage(
+                            slotId: r.slotNumber, licensePlate: r.licensePlate)));
+                    if (result == true && mounted) {
+                      setState(() { _hasArrivedAtSlot = true; });
+                    }
+                  },
                   icon: const Icon(Icons.navigation),
                   label: Text(AppStrings.get('navigateToSlot', lang),
                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
@@ -419,6 +426,9 @@ class _ParkingPageState extends State<ParkingPage> with WidgetsBindingObserver {
 
     if (result != null && mounted) {
       final success = await provider.extendReservation(r.id, result);
+      if (success && mounted) {
+        await provider.handleReservationExpired(); // Force refresh after extend
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -456,6 +466,9 @@ class _ParkingPageState extends State<ParkingPage> with WidgetsBindingObserver {
     );
     if (confirm == true && mounted) {
       final success = await provider.cancelReservation(r.id);
+      if (success && mounted) {
+        await provider.handleReservationExpired(); // Force refresh after cancel
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -549,17 +562,19 @@ class _ParkingPageState extends State<ParkingPage> with WidgetsBindingObserver {
                           border: Border.all(color: theme.dividerColor),
                         ),
                         child: SingleChildScrollView(
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(child: _buildSlotColumn(colD, provider, isLeftSkew: true)),
-                              ParkingLane(arrowCount: laneArrowCount),
-                              Expanded(child: _buildSlotColumn(colC, provider, isLeftSkew: false)),
-                              const SizedBox(width: 4),
-                              Expanded(child: _buildSlotColumn(colB, provider, isLeftSkew: true)),
-                              ParkingLane(arrowCount: laneArrowCount),
-                              Expanded(child: _buildSlotColumn(colA, provider, isLeftSkew: false)),
-                            ],
+                          child: Directionality(
+                            textDirection: ui.TextDirection.ltr,
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: _buildSlotColumn(colA, provider, isLeftSkew: true)),
+                                ParkingLane(arrowCount: laneArrowCount),
+                                Expanded(child: _buildSlotColumn(colB, provider, isLeftSkew: false)),
+                                Expanded(child: _buildSlotColumn(colC, provider, isLeftSkew: true)),
+                                ParkingLane(arrowCount: laneArrowCount),
+                                Expanded(child: _buildSlotColumn(colD, provider, isLeftSkew: false)),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -726,7 +741,7 @@ class DiagonalParkingSlot extends StatelessWidget {
           transform: Matrix4.skewY(isLeftSkew ? -0.3 : 0.3),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
-            height: 50,
+            height: (slot.slotNumber.startsWith('B') || slot.slotNumber.startsWith('C')) ? 100.0 : 50.0,
             decoration: BoxDecoration(
               color: bgColor,
               borderRadius: BorderRadius.circular(10),

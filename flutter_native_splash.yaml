@@ -1,0 +1,5 @@
+flutter_native_splash:
+  color: "#FFFFFF" # اللون اللي هيبان قبل الـ Flutter يفتح (غيره لو عايز اسود "#000000")
+  android_12:
+    image: "assets/transparent_pixel.png" # الحيلة عشان ميحطش الايكون بتاعت التطبيق
+    color: "#FFFFFF"

@@ -3,14 +3,17 @@ import '../models/parking_slot.dart';
 import '../models/parking_summary.dart';
 import '../models/reservation.dart';
 import '../repositories/parking_repository.dart';
+import '../services/secure_storage_service.dart';
 
 class ParkingProvider extends ChangeNotifier {
   ParkingProvider(this._parkingRepository) {
     loadSummary();
     loadSlots();
+    _loadCancelledIds();
   }
 
   final ParkingRepository _parkingRepository;
+  final Set<int> _locallyCancelledIds = {};
 
   ParkingSummary? _summary;
   bool _isSummaryLoading = false;
@@ -33,6 +36,12 @@ class ParkingProvider extends ChangeNotifier {
   String? get reservationError => _reservationError;
   List<Reservation> get reservations => _reservations;
   bool get isReservationsLoading => _isReservationsLoading;
+
+  bool isLocallyCancelled(int id) => _locallyCancelledIds.contains(id);
+
+  Future<void> _loadCancelledIds() async {
+    _locallyCancelledIds.addAll(await SecureStorageService().readCancelledIds());
+  }
 
   void setFloor(String floor) {
     _selectedFloor = ((int.tryParse(floor) ?? 0) + 1).toString();
@@ -87,6 +96,7 @@ class ParkingProvider extends ChangeNotifier {
         startTime: startTime, endTime: endTime,
       );
       await loadSlots();
+      await loadReservations(); // Fetch new reservation immediately for Countdown
       return result;
     } catch (e) {
       _reservationError = e.toString();
@@ -102,6 +112,7 @@ class ParkingProvider extends ChangeNotifier {
     _isReservationsLoading = true;
     notifyListeners();
     try {
+      // Load all reservations, let the UI decide how to display them
       _reservations = await _parkingRepository.fetchReservations();
     } catch (e) {
       if (kDebugMode) print('Reservations Error: $e');
@@ -111,29 +122,29 @@ class ParkingProvider extends ChangeNotifier {
     }
   }
 
-  /// Force cleanup expired reservations then reload everything
   Future<void> handleReservationExpired() async {
-    if (kDebugMode) print('🔄 Forcing cleanup of expired reservations...');
+    if (kDebugMode) print('Forcing cleanup of expired reservations...');
     try {
-      // Step 1: Tell backend to cleanup NOW
       await _parkingRepository.cleanupExpired();
-      if (kDebugMode) print('✅ Backend cleanup done');
+      if (kDebugMode) print('Backend cleanup done');
     } catch (e) {
-      if (kDebugMode) print('⚠️ Cleanup call failed: $e');
+      if (kDebugMode) print('Cleanup call failed: $e');
     }
-    // Step 2: Reload everything
     await loadReservations();
     await loadSlots();
     await loadSummary();
-    if (kDebugMode) print('✅ All data refreshed');
+    if (kDebugMode) print('All data refreshed');
   }
 
   Future<bool> cancelReservation(int reservationId) async {
     try {
       final success = await _parkingRepository.cancelReservation(reservationId);
       if (success) {
-        await loadReservations();
+        _locallyCancelledIds.add(reservationId);
+        await SecureStorageService().addCancelledId(reservationId);
+        notifyListeners(); 
         await loadSlots();
+        await loadSummary();
       }
       return success;
     } catch (e) {

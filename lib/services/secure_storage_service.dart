@@ -25,5 +25,17 @@ class SecureStorageService {
     await _storage.delete(key: _keyAccessToken);
     await _storage.delete(key: _keyRefreshToken);
   }
-}
 
+
+  Future<void> addCancelledId(int id) async {
+    final current = await readCancelledIds();
+    current.add(id);
+    await _storage.write(key: 'cancelled_ids', value: current.join(','));
+  }
+
+  Future<Set<int>> readCancelledIds() async {
+    final raw = await _storage.read(key: 'cancelled_ids');
+    if (raw == null || raw.isEmpty) return {};
+    return raw.split(',').where((s) => s.isNotEmpty).map((s) => int.parse(s)).toSet();
+  }
+}
